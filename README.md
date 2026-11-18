@@ -12,7 +12,7 @@ Cek akun email **milikmu sendiri** lewat Telegram. Bot login IMAP (read-only, cu
 
 Atau kirim langsung `email:password` tanpa perintah.
 
-**File massal:** kirim file `.txt`, 1 akun per baris `email:password`, maks 30 baris per file. Hasil LIVE & DEAD dikirim balik.
+**File massal:** kirim file `.txt`, 1 akun per baris `email:password`, maks 3.000 baris per file. Hasil LIVE & DEAD dikirim balik.
 
 Provider otomatis dikenali: Gmail, Outlook/Hotmail/Live, Yahoo, AOL, iCloud, Yandex, Zoho, GMX, Mail.ru. Domain lain ditebak `imap.domainkamu` — kalau salah, sebutkan host manual.
 
@@ -85,6 +85,6 @@ Di HP Android bisa pakai Termux dengan perintah yang sama, tapi bot mati kalau T
 
 - Hanya untuk akun email milikmu sendiri.
 - Bot tidak membaca isi email, tidak menghapus, tidak menyimpan password.
-- Maks 30 akun per file, jeda 1 detik per akun — biar tidak kena rate-limit / blokir provider.
+- Maks 3.000 akun per file, dicek paralel 10 akun sekaligus — 3.000 akun perkiraan belasan menit, tergantung provider. Kalau provider memblokir karena terlalu cepat, turunkan BULK_CONCURRENCY ke 5 di env var.
 - Kalau provider memblokir login berulang, tunggu sebentar lalu coba lagi, dan pastikan IMAP aktif di pengaturan emailmu.
 - Token bot bocor? Revoke di `@BotFather` → `/revoke` lalu ganti token di hosting.

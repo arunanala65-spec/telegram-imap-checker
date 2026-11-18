@@ -10,4 +10,6 @@ services:
       - key: BOT_TOKEN
         sync: false
       - key: MAX_FILE_LINES
-        value: "30"
+        value: "3000"
+      - key: BULK_CONCURRENCY
+        value: "10"
