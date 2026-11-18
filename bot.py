@@ -373,9 +373,32 @@ async def handle_text_fallback(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Ketik /cek lalu `email:password` — atau /help untuk panduan.", parse_mode="Markdown")
 
 
+def _start_keepalive_server():
+    """Server HTTP kecil supaya hosting Web Service Free (mis. Render) tidak menganggap bot mati.
+    Hanya jawab 200 OK di /. Tidak dipakai untuk bot-nya sendiri (bot tetap polling Telegram)."""
+    port = int(os.environ.get("PORT", "0") or 0)
+    if not port:
+        return
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+        def log_message(self, *a):
+            pass
+
+    threading.Thread(target=HTTPServer(("0.0.0.0", port), H).serve_forever, daemon=True).start()
+    log.info("Keep-alive HTTP jalan di port %s", port)
+
+
 def main():
     if not BOT_TOKEN:
         raise SystemExit("BOT_TOKEN belum diisi. Isi env var BOT_TOKEN dari @BotFather. Lihat .env.example")
+    _start_keepalive_server()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
