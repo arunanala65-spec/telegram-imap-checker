@@ -1,0 +1,13 @@
+# Render Free — pilih Worker (bukan Web Service) supaya polling tidak tidur.
+# Isi BOT_TOKEN di dashboard Render > Environment.
+services:
+  - type: worker
+    name: telegram-imap-checker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: MAX_FILE_LINES
+        value: "30"
